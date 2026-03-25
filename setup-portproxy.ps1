@@ -1,4 +1,4 @@
-# setup-portproxy.ps1
+﻿# setup-portproxy.ps1
 # WSL2 ポートフォワード設定スクリプト（管理者PowerShellで実行してください）
 
 $PORTS = @(5173, 3001)
@@ -35,7 +35,7 @@ foreach ($port in $PORTS) {
         name="$RULE_PREFIX $port" `
         dir=in action=allow protocol=TCP localport=$port
 
-    Write-Host "ポート $port を転送設定しました ($wsl_ip:$port)"
+    Write-Host "ポート $port を転送設定しました (${wsl_ip}:$port)"
 }
 
 Write-Host ""
