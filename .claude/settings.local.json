@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(for f:*)",
+      "Bash(do echo:*)",
+      "Read(//home/cyber/typing-battle/**)",
+      "Bash(done)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)",
+      "Bash(docker-compose up:*)",
+      "Bash(docker compose:*)",
+      "Bash(docker --version)",
+      "Bash(docker exec:*)",
+      "Bash(npm run:*)",
+      "Bash(curl:*)",
+      "Bash(npx vite:*)",
+      "Bash(sed -i 's/import { useState, useEffect, useRef }/import { useState, useRef }/' /home/cyber/typing-battle/frontend/src/hooks/useTyping.ts)",
+      "Bash(sed -i '/^import.*AppPage/d' /home/cyber/typing-battle/frontend/src/pages/LobbyPage.tsx)",
+      "Bash(npx ts-node:*)",
+      "Bash(psql:*)",
+      "Bash(docker ps:*)",
+      "Bash(chmod:*)",
+      "Bash(docker-compose -f /home/cyber/typing-battle/docker-compose.yml ps)",
+      "Bash(docker port:*)",
+      "Bash(nc -zv 127.0.0.1 5432)"
+    ]
+  }
+}

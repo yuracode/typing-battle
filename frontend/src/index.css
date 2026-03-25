@@ -1,0 +1,23 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-slate-50 dark:bg-slate-900 transition-colors duration-200;
+  color: #e2e8f0;
+  font-family: 'Noto Sans JP', sans-serif;
+}
+
+.typing-char {
+  @apply transition-colors duration-75;
+}
+.typing-char.correct { @apply text-green-400; }
+.typing-char.incorrect { @apply text-red-400 bg-red-900/30; }
+.typing-char.current { @apply bg-indigo-500/40 border-b-2 border-indigo-400; }
+.typing-char.pending { @apply text-slate-500 dark:text-slate-400; }
+
+/* TypingInput コンポーネントで使用する文字スタイル */
+.char-correct { @apply text-green-400 transition-colors duration-75; }
+.char-wrong   { @apply text-red-400 bg-red-50 dark:bg-red-900/30 transition-colors duration-75; }
+.char-current { @apply bg-indigo-100 dark:bg-indigo-500/40 border-b-2 border-slate-300 dark:border-slate-500 transition-colors duration-75; }
+.char-pending { @apply text-slate-500 dark:text-slate-400 transition-colors duration-75; }

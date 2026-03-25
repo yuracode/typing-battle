@@ -1,0 +1,27 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: typing_battle_postgres
+    environment:
+      POSTGRES_DB: typing_battle
+      POSTGRES_USER: typing_user
+      POSTGRES_PASSWORD: typing_pass
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/src/db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: typing_battle_redis
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - '6379:6379'
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
