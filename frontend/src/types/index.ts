@@ -23,6 +23,8 @@ export interface Score {
   mode: 'practice' | 'battle';
   wpm: number;
   accuracy: number;
+  typed_chars: number;
+  duration_ms: number;
   created_at: string;
 }
 
@@ -38,6 +40,7 @@ export interface Player {
   rank?: number;
   topicIndex: number;
   completedCount: number;
+  typedChars: number;
 }
 
 export type PlayerProgress = Player;
@@ -51,6 +54,8 @@ export interface BattleRanking {
   finished: boolean;
   rank: number;
   completedCount: number;
+  typedChars: number;
+  kpm: number;
 }
 
 export type AppPage = 'lobby' | 'practice' | 'battle' | 'result' | 'stats' | 'ranking';

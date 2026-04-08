@@ -7,7 +7,7 @@ interface Props {
 }
 
 export default function ProgressBar({ players, myNickname, totalTopics = 1 }: Props) {
-  // 完了問題数→現問題進捗で総合ソート
+  // 完了問題数→現問題進捗で総合ソート（リアルタイム表示用）
   const sorted = [...players].sort((a, b) => {
     const scoreA = (a.completedCount ?? 0) * 100 + (a.progress ?? 0);
     const scoreB = (b.completedCount ?? 0) * 100 + (b.progress ?? 0);
@@ -34,7 +34,7 @@ export default function ProgressBar({ players, myNickname, totalTopics = 1 }: Pr
                 {totalTopics > 1 && (
                   <span className="mr-2 text-emerald-400 font-bold">{completed}/{totalTopics}問</span>
                 )}
-                {p.wpm} WPM
+                {p.typedChars ?? 0} 打
               </span>
             </div>
             <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-3">

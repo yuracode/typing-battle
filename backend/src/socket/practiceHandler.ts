@@ -30,17 +30,21 @@ export function registerPracticeHandlers(_io: Server, socket: Socket) {
       topicId,
       wpm,
       accuracy,
+      typedChars,
+      durationMs,
     }: {
       userId: string;
       topicId: number;
       wpm: number;
       accuracy: number;
+      typedChars?: number;
+      durationMs?: number;
     }) => {
       try {
         const rows = await query(
-          `INSERT INTO scores (user_id, topic_id, mode, wpm, accuracy)
-           VALUES ($1, $2, 'practice', $3, $4) RETURNING *`,
-          [userId, topicId, wpm, accuracy]
+          `INSERT INTO scores (user_id, topic_id, mode, wpm, accuracy, typed_chars, duration_ms)
+           VALUES ($1, $2, 'practice', $3, $4, $5, $6) RETURNING *`,
+          [userId, topicId, wpm, accuracy, typedChars ?? 0, durationMs ?? 0]
         );
         socket.emit('practice:saved', { score: rows[0] });
       } catch (err) {

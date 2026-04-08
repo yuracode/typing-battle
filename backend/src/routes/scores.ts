@@ -36,16 +36,29 @@ router.get('/history/:userId', async (req, res) => {
   }
 });
 
-// 全体ランキング（練習モード best WPM）
-router.get('/ranking', async (_req, res) => {
+// 全体ランキング（練習モード）
+// ?sort=chars(default)|kpm|accuracy
+router.get('/ranking', async (req, res) => {
+  const sort = (req.query.sort as string) || 'chars';
+  const orderBy =
+    sort === 'kpm'      ? 'best_kpm DESC'      :
+    sort === 'accuracy' ? 'avg_accuracy DESC'  :
+                          'best_chars DESC';
   try {
     const result = await pool.query(
-      `SELECT u.nickname, MAX(s.wpm) as best_wpm, AVG(s.accuracy) as avg_accuracy, COUNT(*) as games
+      `SELECT u.nickname,
+              MAX(s.typed_chars) as best_chars,
+              MAX(s.wpm) as best_wpm,
+              AVG(s.accuracy) as avg_accuracy,
+              COUNT(*) as games,
+              MAX(CASE WHEN s.duration_ms > 0
+                       THEN ROUND(s.typed_chars * 60000.0 / s.duration_ms)
+                       ELSE 0 END) as best_kpm
        FROM scores s
        JOIN users u ON u.id = s.user_id
        WHERE s.mode = 'practice'
        GROUP BY u.id, u.nickname
-       ORDER BY best_wpm DESC
+       ORDER BY ${orderBy}
        LIMIT 30`
     );
     res.json(result.rows);

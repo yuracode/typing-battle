@@ -33,7 +33,10 @@ export default function Battle({ socket, nickname, userId, onBack, onFinish }: P
   const [players, setPlayers] = useState<PlayerProgress[]>([]);
   const [startTime, setStartTime] = useState<number | null>(null);
   const [elapsed, setElapsed] = useState(0);
+  const battleStartTimeRef = useRef<number | null>(null);
   const [myFinished, setMyFinished] = useState(false);
+  const totalTypedCharsRef = useRef(0);
+  const currentProblemCharsRef = useRef(0);
 
   useEffect(() => {
     const doJoin = () => socket.emit('join_battle', { nickname, userId, isHost });
@@ -59,8 +62,12 @@ export default function Battle({ socket, nickname, userId, onBack, onFinish }: P
       setCurrentTopicIndex(0);
       setTimeLimit(tl);
       setPhase('battle');
-      setStartTime(Date.now());
+      const now = Date.now();
+      battleStartTimeRef.current = now;
+      setStartTime(now);
       setMyFinished(false);
+      totalTypedCharsRef.current = 0;
+      currentProblemCharsRef.current = 0;
     });
 
     // 次の問題
@@ -70,6 +77,7 @@ export default function Battle({ socket, nickname, userId, onBack, onFinish }: P
       setTotalTopics(tt);
       setMyFinished(false);
       setStartTime(Date.now());
+      currentProblemCharsRef.current = 0;
     });
 
     socket.on('progress_update', ({ players: pl }: { players: PlayerProgress[] }) => {
@@ -93,29 +101,31 @@ export default function Battle({ socket, nickname, userId, onBack, onFinish }: P
     };
   }, []);
 
-  // 経過時間タイマー（battle_start 時のみリセット）
+  // 経過時間タイマー（battle_start 時のみリセット、次の問題では継続）
   useEffect(() => {
-    if (phase !== 'battle' || !startTime) return;
-    const base = startTime;
-    setElapsed(0);
+    if (phase !== 'battle') return;
+    const base = battleStartTimeRef.current ?? Date.now();
+    setElapsed(Math.floor((Date.now() - base) / 1000));
     const timer = setInterval(() => {
       setElapsed(Math.floor((Date.now() - base) / 1000));
     }, 1000);
     return () => clearInterval(timer);
-  }, [phase, startTime]);
+  }, [phase]);
 
   const lastProgressRef = useRef<number>(0);
-  const handleProgress = (progress: number, wpm: number) => {
+  const handleProgress = (progress: number, wpm: number, typedChars: number) => {
     const now = Date.now();
     if (now - lastProgressRef.current < 200) return;
     lastProgressRef.current = now;
-    socket.emit('typing_progress', { progress, wpm });
+    socket.emit('typing_progress', { progress, wpm, typedChars });
   };
 
-  const handleComplete = (wpm: number, accuracy: number) => {
+  const handleComplete = (wpm: number, accuracy: number, durationMs?: number, _mistakes?: number, typedChars?: number) => {
     if (myFinished) return;
     setMyFinished(true); // 次の問題が届くまで一時的に無効化
-    socket.emit('typing_complete', { wpm, accuracy });
+    totalTypedCharsRef.current += typedChars ?? 0;
+    currentProblemCharsRef.current = 0;
+    socket.emit('typing_complete', { wpm, accuracy, typedChars: typedChars ?? 0, durationMs: durationMs ?? 0 });
   };
 
   const handleStartBattle = () => {
@@ -199,8 +209,11 @@ export default function Battle({ socket, nickname, userId, onBack, onFinish }: P
                     <button
                       key={sec}
                       onClick={() => setTimeLimitSec(sec)}
-                      data-active={timeLimitSec === sec}
-                      className="flex-1 text-sm font-bold px-3 py-2 rounded-lg transition-colors text-slate-700 dark:text-white bg-slate-200 dark:bg-slate-600 hover:bg-slate-300 dark:hover:bg-slate-500 data-[active=true]:bg-sky-600 data-[active=true]:text-white"
+                      className={`flex-1 text-sm font-bold px-3 py-2 rounded-lg transition-colors ${
+                        timeLimitSec === sec
+                          ? 'bg-sky-600 text-white'
+                          : 'text-slate-700 dark:text-white bg-slate-200 dark:bg-slate-600 hover:bg-slate-300 dark:hover:bg-slate-500'
+                      }`}
                     >
                       {sec === 60 ? '1分' : sec === 180 ? '3分' : sec === 300 ? '5分' : '10分'}
                     </button>

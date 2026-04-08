@@ -2,9 +2,11 @@ import { useEffect, useState } from 'react';
 
 interface RankingEntry {
   nickname: string;
+  best_chars: number;
   best_wpm: number;
   avg_accuracy: number;
   games: number;
+  best_kpm: number;
 }
 
 interface Props {
@@ -14,19 +16,23 @@ interface Props {
 
 const medalEmoji = ['🥇', '🥈', '🥉'];
 
+type RankSort = 'chars' | 'kpm' | 'accuracy';
+
 export default function Ranking({ nickname, onBack }: Props) {
   const [ranking, setRanking] = useState<RankingEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [sortBy, setSortBy] = useState<RankSort>('chars');
 
   useEffect(() => {
-    fetch('/api/scores/ranking')
+    setLoading(true);
+    fetch(`/api/scores/ranking?sort=${sortBy}`)
       .then((r) => r.json())
       .then((data) => {
         setRanking(Array.isArray(data) ? data : []);
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  }, []);
+  }, [sortBy]);
 
   const myEntry = ranking.find((r) => r.nickname === nickname);
   const myRank = myEntry ? ranking.indexOf(myEntry) + 1 : null;
@@ -55,7 +61,13 @@ export default function Ranking({ nickname, onBack }: Props) {
             </div>
           </div>
           <div className="text-right">
-            <p className="text-sky-400 font-bold text-xl">{myEntry.best_wpm} WPM</p>
+            {sortBy === 'kpm' ? (
+              <p className="text-amber-400 font-bold text-xl">{myEntry.best_kpm} 打/分</p>
+            ) : sortBy === 'accuracy' ? (
+              <p className="text-emerald-400 font-bold text-xl">{Math.round(Number(myEntry.avg_accuracy))}%</p>
+            ) : (
+              <p className="text-sky-400 font-bold text-xl">{myEntry.best_chars} 打</p>
+            )}
             <p className="text-slate-500 dark:text-slate-400 text-xs">{myEntry.games}回プレイ</p>
           </div>
         </div>
@@ -63,7 +75,24 @@ export default function Ranking({ nickname, onBack }: Props) {
 
       {/* ランキングリスト */}
       <div className="bg-white dark:bg-slate-800 rounded-2xl p-6">
-        <p className="text-slate-500 dark:text-slate-400 text-xs mb-4">練習モードのベストWPM順（上位30名）</p>
+        {/* ソートタブ */}
+        <div className="flex gap-1 mb-4">
+          {([
+            { key: 'chars',    label: '打鍵数',   color: 'bg-sky-600' },
+            { key: 'kpm',      label: '打鍵/分',  color: 'bg-amber-600' },
+            { key: 'accuracy', label: '正確率',   color: 'bg-emerald-600' },
+          ] as { key: RankSort; label: string; color: string }[]).map(({ key, label, color }) => (
+            <button
+              key={key}
+              onClick={() => setSortBy(key)}
+              className={`text-xs px-3 py-1.5 rounded-lg font-bold transition-colors ${
+                sortBy === key ? `${color} text-white` : 'bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600'
+              }`}
+            >
+              {label}順
+            </button>
+          ))}
+        </div>
         {loading ? (
           <p className="text-slate-400 dark:text-slate-500 text-center py-8">読み込み中...</p>
         ) : ranking.length === 0 ? (
@@ -96,9 +125,15 @@ export default function Ranking({ nickname, onBack }: Props) {
                   </div>
                 </div>
                 <div className="text-right">
-                  <p className="font-bold text-sky-400">{r.best_wpm} WPM</p>
-                  <p className="text-emerald-400 text-xs">
-                    正確率 {Math.round(Number(r.avg_accuracy))}%
+                  {sortBy === 'kpm' ? (
+                    <p className="font-bold text-amber-400">{r.best_kpm} 打/分</p>
+                  ) : sortBy === 'accuracy' ? (
+                    <p className="font-bold text-emerald-400">{Math.round(Number(r.avg_accuracy))}%</p>
+                  ) : (
+                    <p className="font-bold text-sky-400">{r.best_chars} 打</p>
+                  )}
+                  <p className="text-slate-500 dark:text-slate-400 text-xs">
+                    {sortBy !== 'accuracy' && `正確率 ${Math.round(Number(r.avg_accuracy))}% · `}{r.games}回
                   </p>
                 </div>
               </div>

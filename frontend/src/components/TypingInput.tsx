@@ -12,8 +12,8 @@ interface Props {
   mode: 'direct' | 'romaji';
   /** direct モード: コード文字列 / romaji モード: ひらがな文字列 */
   target: string;
-  onProgress: (progress: number, wpm: number) => void;
-  onComplete: (wpm: number, accuracy: number, durationMs?: number, mistakes?: number) => void;
+  onProgress: (progress: number, wpm: number, typedChars: number) => void;
+  onComplete: (wpm: number, accuracy: number, durationMs?: number, mistakes?: number, typedChars?: number) => void;
   disabled?: boolean;
   startTime: number | null;
 }
@@ -44,9 +44,12 @@ export default function TypingInput({
   const [engine, setEngine] = useState<EngineState | null>(null);
   // direct モード
   const [direct, setDirect] = useState<DirectState>({ position: 0, mistakes: 0, flash: false });
+  // 打鍵数カウンター
+  const typedCharsRef = useRef(0);
 
   // target / mode 変更時にリセット
   useEffect(() => {
+    typedCharsRef.current = 0;
     if (mode === 'romaji') {
       setEngine({ tokens: tokenize(target), tokenIdx: 0, buffer: '', mistakes: 0 });
     } else {
@@ -90,14 +93,15 @@ export default function TypingInput({
       setEngine(result.newState);
 
       if (result.accepted) {
+        typedCharsRef.current++;
         const progress = getProgress(result.newState);
-        const wpm = calcWpm(result.newState.tokenIdx * 3, elapsed); // 平均3打/字の概算
-        onProgress(progress, wpm);
+        const wpm = calcWpm(typedCharsRef.current, elapsed);
+        onProgress(progress, wpm, typedCharsRef.current);
 
         if (result.allCompleted) {
-          const total = engine.tokens.length;
-          const accuracy = Math.max(0, Math.round(((total - result.newState.mistakes) / total) * 100));
-          onComplete(wpm, accuracy, elapsed, result.newState.mistakes);
+          const totalInput = typedCharsRef.current + result.newState.mistakes;
+          const accuracy = totalInput > 0 ? Math.round((typedCharsRef.current / totalInput) * 100) : 100;
+          onComplete(wpm, accuracy, elapsed, result.newState.mistakes, typedCharsRef.current);
         }
       }
       // 不正解は state.mistakes が増えるだけ（ブロック）
@@ -115,18 +119,17 @@ export default function TypingInput({
 
       if (actualKey === target[direct.position]) {
         // 正解
+        typedCharsRef.current++;
         const newPos = direct.position + 1;
         const progress = Math.round((newPos / target.length) * 100);
-        const wpm = calcWpm(newPos, elapsed);
-        onProgress(progress, wpm);
+        const wpm = calcWpm(typedCharsRef.current, elapsed);
+        onProgress(progress, wpm, typedCharsRef.current);
         setDirect((prev) => ({ ...prev, position: newPos }));
 
         if (newPos === target.length) {
-          const accuracy = Math.max(
-            0,
-            Math.round(((target.length - direct.mistakes) / target.length) * 100)
-          );
-          onComplete(wpm, accuracy, elapsed, direct.mistakes);
+          const totalInput = typedCharsRef.current + direct.mistakes;
+          const accuracy = totalInput > 0 ? Math.round((typedCharsRef.current / totalInput) * 100) : 100;
+          onComplete(wpm, accuracy, elapsed, direct.mistakes, typedCharsRef.current);
         }
       } else {
         // 誤入力: ブロック + フラッシュ

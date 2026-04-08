@@ -1,4 +1,4 @@
-export type TopicFilterValue = 'all' | 'japanese' | 'java' | 'javascript' | 'python' | 'html' | 'css';
+export type TopicFilterValue = 'all' | 'japanese' | 'java' | 'javascript' | 'python' | 'html' | 'css' | 'typescript' | 'sql';
 
 interface Option {
   value: TopicFilterValue;
@@ -14,6 +14,8 @@ const OPTIONS: Option[] = [
   { value: 'python',     label: 'Python',     color: 'bg-sky-700    hover:bg-sky-600    data-[active=true]:bg-sky-500'    },
   { value: 'html',       label: 'HTML',       color: 'bg-orange-700 hover:bg-orange-600 data-[active=true]:bg-orange-500' },
   { value: 'css',        label: 'CSS',        color: 'bg-blue-700   hover:bg-blue-600   data-[active=true]:bg-blue-500'   },
+  { value: 'typescript', label: 'TypeScript', color: 'bg-indigo-700 hover:bg-indigo-600 data-[active=true]:bg-indigo-500' },
+  { value: 'sql',        label: 'SQL',        color: 'bg-teal-700   hover:bg-teal-600   data-[active=true]:bg-teal-500'   },
 ];
 
 /** APIクエリパラメータに変換 */

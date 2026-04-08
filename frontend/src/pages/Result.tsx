@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { BattleRanking } from '../types';
 
 interface Props {
@@ -8,7 +9,17 @@ interface Props {
 
 const medalEmoji = ['🥇', '🥈', '🥉'];
 
+type ResultSort = 'chars' | 'kpm' | 'accuracy';
+
 export default function Result({ rankings, nickname, onReturnLobby }: Props) {
+  const [sortBy, setSortBy] = useState<ResultSort>('chars');
+
+  const sorted = [...rankings].sort((a, b) => {
+    if (sortBy === 'kpm')      return (b.kpm ?? 0) - (a.kpm ?? 0);
+    if (sortBy === 'accuracy') return Number(b.accuracy) - Number(a.accuracy);
+    return b.typedChars - a.typedChars;
+  }).map((r, i) => ({ ...r, displayRank: i + 1 }));
+
   const myRank = rankings.find((r) => r.nickname === nickname);
 
   return (
@@ -25,8 +36,8 @@ export default function Result({ rankings, nickname, onReturnLobby }: Props) {
             </p>
             <div className="flex justify-center gap-6">
               <div>
-                <p className="text-2xl font-bold text-slate-900 dark:text-white">{myRank.wpm}</p>
-                <p className="text-slate-500 dark:text-slate-400 text-xs">WPM</p>
+                <p className="text-2xl font-bold text-slate-900 dark:text-white">{myRank.typedChars}</p>
+                <p className="text-slate-500 dark:text-slate-400 text-xs">打鍵数</p>
               </div>
               <div>
                 <p className="text-2xl font-bold text-emerald-400">{myRank.accuracy}%</p>
@@ -45,9 +56,28 @@ export default function Result({ rankings, nickname, onReturnLobby }: Props) {
           </div>
         )}
 
+        {/* ソートタブ */}
+        <div className="flex gap-1">
+          {([
+            { key: 'chars',    label: '打鍵数',   color: 'bg-sky-600' },
+            { key: 'kpm',      label: '打鍵/分',  color: 'bg-amber-600' },
+            { key: 'accuracy', label: '正確率',   color: 'bg-emerald-600' },
+          ] as { key: ResultSort; label: string; color: string }[]).map(({ key, label, color }) => (
+            <button
+              key={key}
+              onClick={() => setSortBy(key)}
+              className={`text-xs px-3 py-1.5 rounded-lg font-bold transition-colors ${
+                sortBy === key ? `${color} text-white` : 'bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400'
+              }`}
+            >
+              {label}順
+            </button>
+          ))}
+        </div>
+
         {/* 全体ランキング */}
         <div className="space-y-2">
-          {rankings.map((r) => (
+          {sorted.map((r) => (
             <div
               key={r.nickname}
               className={`flex items-center justify-between rounded-lg px-4 py-3 ${
@@ -58,7 +88,7 @@ export default function Result({ rankings, nickname, onReturnLobby }: Props) {
             >
               <div className="flex items-center gap-3">
                 <span className="text-xl w-8 text-center">
-                  {medalEmoji[r.rank - 1] ?? `${r.rank}`}
+                  {medalEmoji[r.displayRank - 1] ?? `${r.displayRank}`}
                 </span>
                 <span className={`font-semibold ${r.nickname === nickname ? 'text-sky-300' : 'text-slate-900 dark:text-white'}`}>
                   {r.nickname}
@@ -69,8 +99,16 @@ export default function Result({ rankings, nickname, onReturnLobby }: Props) {
                 {r.completedCount > 0 && (
                   <span className="text-purple-400 text-xs mr-2">{r.completedCount}問</span>
                 )}
-                <span className="font-bold text-sky-400">{r.wpm} WPM</span>
-                <span className="text-emerald-400 text-sm ml-2">{r.accuracy}%</span>
+                {sortBy === 'kpm' ? (
+                  <span className="font-bold text-amber-400">{r.kpm ?? 0} 打/分</span>
+                ) : sortBy === 'accuracy' ? (
+                  <span className="font-bold text-emerald-400">{r.accuracy}%</span>
+                ) : (
+                  <span className="font-bold text-sky-400">{r.typedChars} 打</span>
+                )}
+                {sortBy !== 'accuracy' && (
+                  <span className="text-emerald-400 text-sm ml-2">{r.accuracy}%</span>
+                )}
                 {!r.finished && (
                   <span className="text-slate-500 dark:text-slate-400 text-xs ml-2">({r.progress}%)</span>
                 )}

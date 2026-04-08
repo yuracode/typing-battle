@@ -25,6 +25,8 @@ CREATE TABLE IF NOT EXISTS scores (
   mode VARCHAR(10) NOT NULL CHECK (mode IN ('practice', 'battle')),
   wpm INTEGER NOT NULL,
   accuracy NUMERIC(5,2) NOT NULL,
+  typed_chars INTEGER NOT NULL DEFAULT 0,
+  duration_ms INTEGER NOT NULL DEFAULT 0,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -46,6 +48,7 @@ CREATE TABLE IF NOT EXISTS battle_participants (
   user_id UUID REFERENCES users(id),
   wpm INTEGER,
   accuracy NUMERIC(5,2),
+  typed_chars INTEGER DEFAULT 0,
   rank INTEGER,
   finished_at TIMESTAMP WITH TIME ZONE,
   PRIMARY KEY (session_id, user_id)

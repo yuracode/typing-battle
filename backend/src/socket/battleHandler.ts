@@ -11,6 +11,9 @@ interface Player {
   finished: boolean;
   topicIndex: number;
   completedCount: number;
+  typedChars: number;
+  currentTypedChars: number;
+  finishedAt: number | null;
 }
 
 interface BattleSession {
@@ -68,7 +71,8 @@ export function registerBattleHandlers(io: Server, socket: Socket) {
     if (!isHost) {
       session.players[socket.id] = {
         userId, nickname, progress: 0, wpm: 0, accuracy: 0,
-        finished: false, topicIndex: 0, completedCount: 0,
+        finished: false, topicIndex: 0, completedCount: 0, typedChars: 0, currentTypedChars: 0,
+        finishedAt: null,
       };
     }
 
@@ -141,20 +145,23 @@ export function registerBattleHandlers(io: Server, socket: Socket) {
   });
 
   // タイピング進捗更新
-  socket.on('typing_progress', async ({ progress, wpm }: { progress: number; wpm: number }) => {
+  socket.on('typing_progress', async ({ progress, wpm, typedChars }: { progress: number; wpm: number; typedChars?: number }) => {
     const session = await getSession();
     if (!session || session.status !== 'active') return;
     if (!session.players[socket.id]) return;
 
     session.players[socket.id].progress = progress;
     session.players[socket.id].wpm = wpm;
+    if (typedChars !== undefined) {
+      session.players[socket.id].currentTypedChars = typedChars;
+    }
     await saveSession(session);
 
     io.to('battle_room').emit('progress_update', { players: Object.values(session.players) });
   });
 
   // 1問完了
-  socket.on('typing_complete', async ({ wpm, accuracy }: { wpm: number; accuracy: number }) => {
+  socket.on('typing_complete', async ({ wpm, accuracy, typedChars, durationMs }: { wpm: number; accuracy: number; typedChars?: number; durationMs?: number }) => {
     const session = await getSession();
     if (!session || session.status !== 'active') return;
     if (!session.players[socket.id]) return;
@@ -163,12 +170,14 @@ export function registerBattleHandlers(io: Server, socket: Socket) {
     player.wpm = wpm;
     player.accuracy = accuracy;
     player.completedCount++;
+    player.typedChars += typedChars ?? 0;
+    player.currentTypedChars = 0;
 
     // DB に保存
     const currentTopic = session.topics[player.topicIndex];
     await pool.query(
-      `INSERT INTO scores (user_id, topic_id, mode, wpm, accuracy) VALUES ($1, $2, 'battle', $3, $4)`,
-      [player.userId, currentTopic.id, wpm, accuracy]
+      `INSERT INTO scores (user_id, topic_id, mode, wpm, accuracy, typed_chars, duration_ms) VALUES ($1, $2, 'battle', $3, $4, $5, $6)`,
+      [player.userId, currentTopic.id, wpm, accuracy, typedChars ?? 0, durationMs ?? 0]
     );
 
     const nextIndex = player.topicIndex + 1;
@@ -188,6 +197,7 @@ export function registerBattleHandlers(io: Server, socket: Socket) {
       // 全問完了
       player.finished = true;
       player.progress = 100;
+      player.finishedAt = Date.now();
       await saveSession(session);
       io.to('battle_room').emit('progress_update', { players: Object.values(session.players) });
 
@@ -216,8 +226,18 @@ async function endBattle(io: Server, session: BattleSession) {
   session.status = 'finished';
   await saveSession(session);
 
+  const now = Date.now();
   const rankings = Object.values(session.players)
+    .map((p) => {
+      const totalChars = p.typedChars + p.currentTypedChars;
+      const elapsedMs = session.startTime
+        ? (p.finishedAt ?? now) - session.startTime
+        : 0;
+      const kpm = elapsedMs > 0 ? Math.round(totalChars * 60000 / elapsedMs) : 0;
+      return { ...p, typedChars: totalChars, kpm };
+    })
     .sort((a, b) => {
+      if (b.typedChars !== a.typedChars) return b.typedChars - a.typedChars;
       if (b.completedCount !== a.completedCount) return b.completedCount - a.completedCount;
       return b.wpm - a.wpm;
     })

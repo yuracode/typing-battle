@@ -20,11 +20,12 @@ export default function Practice({ socket, nickname, userId, onBack, onViewStats
   const [phase, setPhase] = useState<Phase>('loading');
   const [problem, setProblem] = useState<Problem | null>(null);
   const [startTime, setStartTime] = useState<number | null>(null);
-  const [result, setResult] = useState<{ wpm: number; accuracy: number; durationMs?: number; mistakes?: number } | null>(null);
+  const [result, setResult] = useState<{ wpm: number; accuracy: number; durationMs?: number; mistakes?: number; typedChars?: number } | null>(null);
   const [history, setHistory] = useState<ScoreRecord[]>([]);
   const [currentWpm, setCurrentWpm] = useState(0);
   const [topicFilter, setTopicFilter] = useState<TopicFilterValue>('all');
   const [filterOpen, setFilterOpen] = useState(false);
+  const [historySortBy, setHistorySortBy] = useState<'chars' | 'kpm'>('chars');
 
   // REST APIでお題取得（フィルタ対応）
   const loadProblem = async (filter: TopicFilterValue = topicFilter) => {
@@ -96,9 +97,9 @@ export default function Practice({ socket, nickname, userId, onBack, onViewStats
     setCurrentWpm(wpm);
   };
 
-  const handleComplete = (wpm: number, accuracy: number, durationMs?: number, mistakes?: number) => {
+  const handleComplete = (wpm: number, accuracy: number, durationMs?: number, mistakes?: number, typedChars?: number) => {
     setPhase('done');
-    setResult({ wpm, accuracy, durationMs, mistakes });
+    setResult({ wpm, accuracy, durationMs, mistakes, typedChars });
     if (problem) {
       // Socket経由でスコア保存
       socket.emit('practice:complete', {
@@ -106,6 +107,8 @@ export default function Practice({ socket, nickname, userId, onBack, onViewStats
         topicId: problem.id,
         wpm,
         accuracy,
+        typedChars: typedChars ?? 0,
+        durationMs: durationMs ?? 0,
       });
       // 履歴を更新
       loadHistory();
@@ -165,6 +168,9 @@ export default function Practice({ socket, nickname, userId, onBack, onViewStats
               topicFilter === 'javascript' ? 'bg-yellow-500 text-black' :
               topicFilter === 'python'   ? 'bg-sky-600'    :
               topicFilter === 'html'     ? 'bg-orange-600' :
+              topicFilter === 'css'      ? 'bg-blue-600'   :
+              topicFilter === 'typescript' ? 'bg-indigo-600' :
+              topicFilter === 'sql'      ? 'bg-teal-600'   :
                                            'bg-blue-600'
             }`}
           >
@@ -173,7 +179,9 @@ export default function Practice({ socket, nickname, userId, onBack, onViewStats
              topicFilter === 'java' ? 'Java' :
              topicFilter === 'javascript' ? 'JavaScript' :
              topicFilter === 'python' ? 'Python' :
-             topicFilter === 'html' ? 'HTML' : 'CSS'}
+             topicFilter === 'html' ? 'HTML' :
+             topicFilter === 'css' ? 'CSS' :
+             topicFilter === 'typescript' ? 'TypeScript' : 'SQL'}
             {!filterOpen && phase !== 'typing' && <span className="ml-1 opacity-60">▾</span>}
           </button>
           {filterOpen && (
@@ -243,8 +251,9 @@ export default function Practice({ socket, nickname, userId, onBack, onViewStats
             {(phase === 'typing' || phase === 'done') && problem && (
               <div className="space-y-4">
                 {phase === 'typing' && (
-                  <div className="flex justify-end">
-                    <span className="text-sky-400 font-mono font-bold text-lg">{currentWpm} WPM</span>
+                  <div className="flex justify-end gap-4">
+                    <span className="text-sky-400 font-mono font-bold text-lg">{currentWpm * 5} 打/分</span>
+                    <span className="text-slate-400 font-mono text-sm self-end mb-0.5">{currentWpm} WPM</span>
                   </div>
                 )}
                 <TypingInput
@@ -278,26 +287,34 @@ export default function Practice({ socket, nickname, userId, onBack, onViewStats
             {phase === 'done' && result && (
               <div className="bg-slate-100 dark:bg-slate-700 rounded-xl p-6 space-y-4">
                 <h3 className="text-xl font-bold text-center text-emerald-400">🎉 完了！</h3>
-                <div className="grid grid-cols-4 gap-4 text-center">
+                <div className="grid grid-cols-5 gap-3 text-center">
                   <div>
-                    <p className="text-3xl font-bold text-sky-400">{result.wpm}</p>
-                    <p className="text-slate-500 dark:text-slate-400 text-sm">WPM</p>
+                    <p className="text-3xl font-bold text-sky-400">{result.typedChars ?? 0}</p>
+                    <p className="text-slate-500 dark:text-slate-400 text-xs">打鍵数</p>
+                  </div>
+                  <div>
+                    <p className="text-3xl font-bold text-amber-400">
+                      {result.durationMs && result.durationMs > 0
+                        ? Math.round((result.typedChars ?? 0) * 60000 / result.durationMs)
+                        : '--'}
+                    </p>
+                    <p className="text-slate-500 dark:text-slate-400 text-xs">打鍵/分</p>
                   </div>
                   <div>
                     <p className="text-3xl font-bold text-emerald-400">{result.accuracy}%</p>
-                    <p className="text-slate-500 dark:text-slate-400 text-sm">正確率</p>
+                    <p className="text-slate-500 dark:text-slate-400 text-xs">正確率</p>
                   </div>
                   <div>
                     <p className="text-3xl font-bold text-purple-400">
                       {result.durationMs ? (result.durationMs / 1000).toFixed(1) : '--'}s
                     </p>
-                    <p className="text-slate-500 dark:text-slate-400 text-sm">タイム</p>
+                    <p className="text-slate-500 dark:text-slate-400 text-xs">タイム</p>
                   </div>
                   <div>
                     <p className={`text-3xl font-bold ${(result.mistakes ?? 0) === 0 ? 'text-yellow-400' : 'text-red-400'}`}>
                       {result.mistakes ?? 0}
                     </p>
-                    <p className="text-slate-500 dark:text-slate-400 text-sm">ミス数</p>
+                    <p className="text-slate-500 dark:text-slate-400 text-xs">ミス数</p>
                   </div>
                 </div>
                 <button
@@ -313,25 +330,56 @@ export default function Practice({ socket, nickname, userId, onBack, onViewStats
 
         {/* 履歴サイドバー */}
         <div className="bg-white dark:bg-slate-800 rounded-2xl p-6">
-          <h3 className="font-bold text-slate-700 dark:text-slate-300 mb-4">📊 自分の履歴</h3>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-bold text-slate-700 dark:text-slate-300 text-sm">📊 自分の履歴</h3>
+            <div className="flex text-xs rounded-lg overflow-hidden border border-slate-200 dark:border-slate-600">
+              <button
+                onClick={() => setHistorySortBy('chars')}
+                className={`px-2 py-1 transition-colors ${historySortBy === 'chars' ? 'bg-sky-600 text-white' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700'}`}
+              >
+                文字数
+              </button>
+              <button
+                onClick={() => setHistorySortBy('kpm')}
+                className={`px-2 py-1 transition-colors ${historySortBy === 'kpm' ? 'bg-amber-600 text-white' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700'}`}
+              >
+                打鍵/分
+              </button>
+            </div>
+          </div>
           {history.length === 0 ? (
             <p className="text-slate-400 dark:text-slate-500 text-sm text-center mt-8">まだ記録がありません</p>
           ) : (
             <div className="space-y-3">
-              {history.map((s, i) => (
-                <div key={i} className="bg-slate-100 dark:bg-slate-700 rounded-lg p-3 text-sm">
-                  <div className="flex justify-between items-center">
-                    <span className="text-sky-400 font-bold">{s.wpm} WPM</span>
-                    <span className="text-emerald-400">{s.accuracy}%</span>
-                  </div>
-                  <div className="text-slate-500 dark:text-slate-400 text-xs mt-1">
-                    {new Date(s.created_at).toLocaleString('ja-JP', {
-                      month: 'numeric', day: 'numeric',
-                      hour: '2-digit', minute: '2-digit',
-                    })}
-                  </div>
-                </div>
-              ))}
+              {[...history]
+                .sort((a, b) => {
+                  if (historySortBy === 'kpm') {
+                    const kpmA = a.duration_ms > 0 ? a.typed_chars * 60000 / a.duration_ms : 0;
+                    const kpmB = b.duration_ms > 0 ? b.typed_chars * 60000 / b.duration_ms : 0;
+                    return kpmB - kpmA;
+                  }
+                  return (b.typed_chars || 0) - (a.typed_chars || 0);
+                })
+                .map((s, i) => {
+                  const kpm = s.duration_ms > 0 ? Math.round(s.typed_chars * 60000 / s.duration_ms) : null;
+                  return (
+                    <div key={i} className="bg-slate-100 dark:bg-slate-700 rounded-lg p-3 text-sm">
+                      <div className="flex justify-between items-center">
+                        <span className="text-sky-400 font-bold">{s.typed_chars || 0} 打</span>
+                        <span className="text-emerald-400">{s.accuracy}%</span>
+                      </div>
+                      {kpm !== null && (
+                        <div className="text-amber-400 text-xs mt-0.5">{kpm} 打/分</div>
+                      )}
+                      <div className="text-slate-500 dark:text-slate-400 text-xs mt-1">
+                        {new Date(s.created_at).toLocaleString('ja-JP', {
+                          month: 'numeric', day: 'numeric',
+                          hour: '2-digit', minute: '2-digit',
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
             </div>
           )}
         </div>
