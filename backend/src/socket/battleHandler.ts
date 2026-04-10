@@ -28,6 +28,20 @@ interface BattleSession {
 const SESSION_KEY = 'battle:session';
 const TIME_LIMIT = 180;
 
+// ── セッション操作の直列化ミューテックス ──
+// Node.js は単一スレッドだが await で制御が戻るため、
+// 複数ハンドラが同時に getSession→saveSession すると後勝ちで上書きされる。
+// これを防ぐため Promise チェーンで排他制御する。
+let _lockChain: Promise<void> = Promise.resolve();
+
+function withSessionLock<T>(fn: () => Promise<T>): Promise<T> {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const prev = _lockChain;
+  _lockChain = gate;
+  return prev.then(fn).finally(release);
+}
+
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
@@ -49,176 +63,239 @@ async function saveSession(session: BattleSession): Promise<void> {
 export function registerBattleHandlers(io: Server, socket: Socket) {
   // ロビー参加
   socket.on('join_battle', async ({ nickname, userId, isHost = false }: { nickname: string; userId: string; isHost?: boolean }) => {
-    let session = await getSession();
-    const roomSize = (await io.in('battle_room').fetchSockets()).length;
+    await withSessionLock(async () => {
+      let session = await getSession();
+      const roomSize = (await io.in('battle_room').fetchSockets()).length;
 
-    if (!session || session.status === 'finished' || roomSize === 0) {
-      session = {
-        sessionId: crypto.randomUUID(),
-        status: 'waiting',
-        topics: [],
-        players: {},
-        startTime: null,
-        timeLimit: TIME_LIMIT,
-      };
-    }
+      if (!session || session.status === 'finished' || roomSize === 0) {
+        session = {
+          sessionId: crypto.randomUUID(),
+          status: 'waiting',
+          topics: [],
+          players: {},
+          startTime: null,
+          timeLimit: TIME_LIMIT,
+        };
+      }
 
-    if (session.status === 'active') {
-      socket.emit('battle_error', { message: '対戦が既に開始されています' });
-      return;
-    }
+      // 対戦中でも同じ userId のプレイヤーなら再接続を許可
+      if (session.status === 'active') {
+        const existingEntry = Object.entries(session.players).find(([, p]) => p.userId === userId);
+        if (existingEntry) {
+          // 旧 socket.id のデータを新 socket.id へ移行
+          const [oldSocketId, playerData] = existingEntry;
+          if (oldSocketId !== socket.id) {
+            delete session.players[oldSocketId];
+            session.players[socket.id] = playerData;
+            await saveSession(session);
+          }
+          await socket.join('battle_room');
+          const currentTopic = session.topics[playerData.topicIndex];
+          socket.emit('battle_joined', { sessionId: session.sessionId });
+          socket.emit('battle_start', {
+            topic: currentTopic,
+            totalTopics: session.topics.length,
+            timeLimit: session.timeLimit,
+          });
+          if (playerData.topicIndex > 0) {
+            socket.emit('next_topic', {
+              topic: currentTopic,
+              topicIndex: playerData.topicIndex,
+              totalTopics: session.topics.length,
+            });
+          }
+          io.to('battle_room').emit('progress_update', { players: Object.values(session.players) });
+          return;
+        }
+        socket.emit('battle_error', { message: '対戦が既に開始されています' });
+        return;
+      }
 
-    if (!isHost) {
-      session.players[socket.id] = {
-        userId, nickname, progress: 0, wpm: 0, accuracy: 0,
-        finished: false, topicIndex: 0, completedCount: 0, typedChars: 0, currentTypedChars: 0,
-        finishedAt: null,
-      };
-    }
+      if (!isHost) {
+        session.players[socket.id] = {
+          userId, nickname, progress: 0, wpm: 0, accuracy: 0,
+          finished: false, topicIndex: 0, completedCount: 0, typedChars: 0, currentTypedChars: 0,
+          finishedAt: null,
+        };
+      }
 
-    await saveSession(session);
-    await socket.join('battle_room');
+      await saveSession(session);
+      await socket.join('battle_room');
 
-    const playerList = Object.values(session.players);
-    socket.emit('players_update', { players: playerList });
-    if (!isHost) {
-      socket.to('battle_room').emit('players_update', { players: playerList });
-    }
-    socket.emit('battle_joined', { sessionId: session.sessionId });
+      const playerList = Object.values(session.players);
+      socket.emit('players_update', { players: playerList });
+      if (!isHost) {
+        socket.to('battle_room').emit('players_update', { players: playerList });
+      }
+      socket.emit('battle_joined', { sessionId: session.sessionId });
+    });
   });
 
   // 対戦開始
   socket.on('start_battle', async ({ topicFilter, timeLimit: requestedTimeLimit }: { topicFilter?: { type?: string; language?: string }; timeLimit?: number } = {}) => {
-    const session = await getSession();
-    if (!session || session.status !== 'waiting') return;
+    // カウントダウン前のセットアップのみロック内で行う
+    const sessionSnapshot = await withSessionLock(async () => {
+      const session = await getSession();
+      if (!session || session.status !== 'waiting') return null;
 
-    // 有効な時間制限（60/180/300/600 秒）のみ受け付ける
-    const VALID_LIMITS = [60, 180, 300, 600];
-    const chosenLimit = VALID_LIMITS.includes(requestedTimeLimit ?? 0) ? requestedTimeLimit! : TIME_LIMIT;
-    session.timeLimit = chosenLimit;
+      // 有効な時間制限（60/180/300/600 秒）のみ受け付ける
+      const VALID_LIMITS = [60, 180, 300, 600];
+      const chosenLimit = VALID_LIMITS.includes(requestedTimeLimit ?? 0) ? requestedTimeLimit! : TIME_LIMIT;
+      session.timeLimit = chosenLimit;
 
-    const conditions: string[] = [];
-    const params: string[] = [];
-    if (topicFilter?.type)     { conditions.push(`type = $${params.length + 1}`);     params.push(topicFilter.type); }
-    if (topicFilter?.language) { conditions.push(`language = $${params.length + 1}`); params.push(topicFilter.language); }
-    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-    const result = await pool.query(`SELECT * FROM topics ${where}`, params);
+      const conditions: string[] = [];
+      const params: string[] = [];
+      if (topicFilter?.type)     { conditions.push(`type = $${params.length + 1}`);     params.push(topicFilter.type); }
+      if (topicFilter?.language) { conditions.push(`language = $${params.length + 1}`); params.push(topicFilter.language); }
+      const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+      const result = await pool.query(`SELECT * FROM topics ${where}`, params);
 
-    if (result.rows.length === 0) {
-      socket.emit('battle_error', { message: '該当するお題がありません' });
-      return;
-    }
+      if (result.rows.length === 0) {
+        socket.emit('battle_error', { message: '該当するお題がありません' });
+        return null;
+      }
 
-    session.topics = shuffle(result.rows);
-    session.status = 'countdown';
-    await saveSession(session);
+      session.topics = shuffle(result.rows);
+      session.status = 'countdown';
+      await saveSession(session);
+      return session;
+    });
 
+    if (!sessionSnapshot) return;
+
+    // カウントダウンはロック外（3秒間ロックを握り続けない）
     for (let count = 3; count >= 1; count--) {
       io.to('battle_room').emit('battle_countdown', { count });
       await new Promise((r) => setTimeout(r, 1000));
     }
 
-    session.status = 'active';
-    session.startTime = Date.now();
-    await saveSession(session);
+    await withSessionLock(async () => {
+      const session = await getSession();
+      if (!session || session.status !== 'countdown') return;
 
-    io.to('battle_room').emit('battle_start', {
-      topic: session.topics[0],
-      totalTopics: session.topics.length,
-      timeLimit: chosenLimit,
+      session.status = 'active';
+      session.startTime = Date.now();
+      await saveSession(session);
+
+      io.to('battle_room').emit('battle_start', {
+        topic: session.topics[0],
+        totalTopics: session.topics.length,
+        timeLimit: session.timeLimit,
+      });
+
+      // 制限時間で強制終了
+      setTimeout(async () => {
+        await withSessionLock(async () => {
+          const current = await getSession();
+          if (current && current.status === 'active') {
+            await endBattle(io, current);
+          }
+        });
+      }, session.timeLimit * 1000);
     });
-
-    // 制限時間で強制終了
-    setTimeout(async () => {
-      const current = await getSession();
-      if (current && current.status === 'active') {
-        await endBattle(io, current);
-      }
-    }, chosenLimit * 1000);
   });
 
   // ホストによる強制終了
   socket.on('force_end_battle', async () => {
-    const session = await getSession();
-    if (!session || session.status !== 'active') return;
-    await endBattle(io, session);
+    await withSessionLock(async () => {
+      const session = await getSession();
+      if (!session || session.status !== 'active') return;
+      await endBattle(io, session);
+    });
   });
 
   // タイピング進捗更新
   socket.on('typing_progress', async ({ progress, wpm, typedChars }: { progress: number; wpm: number; typedChars?: number }) => {
-    const session = await getSession();
-    if (!session || session.status !== 'active') return;
-    if (!session.players[socket.id]) return;
+    await withSessionLock(async () => {
+      const session = await getSession();
+      if (!session || session.status !== 'active') return;
+      if (!session.players[socket.id]) return;
 
-    session.players[socket.id].progress = progress;
-    session.players[socket.id].wpm = wpm;
-    if (typedChars !== undefined) {
-      session.players[socket.id].currentTypedChars = typedChars;
-    }
-    await saveSession(session);
+      session.players[socket.id].progress = progress;
+      session.players[socket.id].wpm = wpm;
+      if (typedChars !== undefined) {
+        session.players[socket.id].currentTypedChars = typedChars;
+      }
+      await saveSession(session);
 
-    io.to('battle_room').emit('progress_update', { players: Object.values(session.players) });
+      io.to('battle_room').emit('progress_update', { players: Object.values(session.players) });
+    });
   });
 
   // 1問完了
   socket.on('typing_complete', async ({ wpm, accuracy, typedChars, durationMs }: { wpm: number; accuracy: number; typedChars?: number; durationMs?: number }) => {
-    const session = await getSession();
-    if (!session || session.status !== 'active') return;
-    if (!session.players[socket.id]) return;
+    await withSessionLock(async () => {
+      const session = await getSession();
+      if (!session || session.status !== 'active') return;
+      if (!session.players[socket.id]) return;
 
-    const player = session.players[socket.id];
-    player.wpm = wpm;
-    player.accuracy = accuracy;
-    player.completedCount++;
-    player.typedChars += typedChars ?? 0;
-    player.currentTypedChars = 0;
+      const player = session.players[socket.id];
+      if (player.finished) return; // 既に全問完了済み
 
-    // DB に保存
-    const currentTopic = session.topics[player.topicIndex];
-    await pool.query(
-      `INSERT INTO scores (user_id, topic_id, mode, wpm, accuracy, typed_chars, duration_ms) VALUES ($1, $2, 'battle', $3, $4, $5, $6)`,
-      [player.userId, currentTopic.id, wpm, accuracy, typedChars ?? 0, durationMs ?? 0]
-    );
+      player.wpm = wpm;
+      player.accuracy = accuracy;
+      player.completedCount++;
+      player.typedChars += typedChars ?? 0;
+      player.currentTypedChars = 0;
 
-    const nextIndex = player.topicIndex + 1;
+      // DB に保存
+      const currentTopic = session.topics[player.topicIndex];
+      await pool.query(
+        `INSERT INTO scores (user_id, topic_id, mode, wpm, accuracy, typed_chars, duration_ms) VALUES ($1, $2, 'battle', $3, $4, $5, $6)`,
+        [player.userId, currentTopic.id, wpm, accuracy, typedChars ?? 0, durationMs ?? 0]
+      );
 
-    if (nextIndex < session.topics.length) {
-      // 次の問題へ
-      player.topicIndex = nextIndex;
-      player.progress = 0;
-      await saveSession(session);
-      socket.emit('next_topic', {
-        topic: session.topics[nextIndex],
-        topicIndex: nextIndex,
-        totalTopics: session.topics.length,
-      });
-      io.to('battle_room').emit('progress_update', { players: Object.values(session.players) });
-    } else {
-      // 全問完了
-      player.finished = true;
-      player.progress = 100;
-      player.finishedAt = Date.now();
-      await saveSession(session);
-      io.to('battle_room').emit('progress_update', { players: Object.values(session.players) });
+      const nextIndex = player.topicIndex + 1;
 
-      const allFinished = Object.values(session.players).every((p) => p.finished);
-      if (allFinished) await endBattle(io, session);
-    }
+      if (nextIndex < session.topics.length) {
+        // 次の問題へ
+        player.topicIndex = nextIndex;
+        player.progress = 0;
+        await saveSession(session);
+        socket.emit('next_topic', {
+          topic: session.topics[nextIndex],
+          topicIndex: nextIndex,
+          totalTopics: session.topics.length,
+        });
+        io.to('battle_room').emit('progress_update', { players: Object.values(session.players) });
+      } else {
+        // 全問完了
+        player.finished = true;
+        player.progress = 100;
+        player.finishedAt = Date.now();
+        await saveSession(session);
+        io.to('battle_room').emit('progress_update', { players: Object.values(session.players) });
+
+        const allFinished = Object.values(session.players).every((p) => p.finished);
+        if (allFinished) await endBattle(io, session);
+      }
+    });
   });
 
   // 切断処理
   socket.on('disconnect', async () => {
-    const session = await getSession();
-    if (!session) return;
-    const wasPlayer = socket.id in session.players;
-    delete session.players[socket.id];
-    if (Object.keys(session.players).length === 0) {
-      session.status = 'finished';
-    }
-    await saveSession(session);
-    if (wasPlayer) {
-      socket.to('battle_room').emit('players_update', { players: Object.values(session.players) });
-    }
+    await withSessionLock(async () => {
+      const session = await getSession();
+      if (!session) return;
+
+      // 対戦中は即座に削除せず、再接続の猶予を与える
+      if (session.status === 'active' && session.players[socket.id]) {
+        // プレイヤーデータは保持したまま（join_battle で再接続時に socket.id を差し替える）
+        // ただしルームからは自動で外れるため progress_update だけ通知
+        socket.to('battle_room').emit('progress_update', { players: Object.values(session.players) });
+        return;
+      }
+
+      const wasPlayer = socket.id in session.players;
+      delete session.players[socket.id];
+      if (Object.keys(session.players).length === 0) {
+        session.status = 'finished';
+      }
+      await saveSession(session);
+      if (wasPlayer) {
+        socket.to('battle_room').emit('players_update', { players: Object.values(session.players) });
+      }
+    });
   });
 }
 

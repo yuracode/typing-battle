@@ -62,6 +62,17 @@ export default function TypingInput({
     if (!disabled) containerRef.current?.focus();
   }, [disabled]);
 
+  // 頻繁な progress_update 再レンダリングでフォーカスが外れるのを防止
+  useEffect(() => {
+    if (disabled) return;
+    const interval = setInterval(() => {
+      if (document.activeElement !== containerRef.current) {
+        containerRef.current?.focus();
+      }
+    }, 500);
+    return () => clearInterval(interval);
+  }, [disabled]);
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (disabled || !startTime) return;
 

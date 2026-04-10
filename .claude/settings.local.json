@@ -22,7 +22,9 @@
       "Bash(chmod:*)",
       "Bash(docker-compose -f /home/cyber/typing-battle/docker-compose.yml ps)",
       "Bash(docker port:*)",
-      "Bash(nc -zv 127.0.0.1 5432)"
+      "Bash(nc -zv 127.0.0.1 5432)",
+      "Bash(./node_modules/.bin/tsc --noEmit)",
+      "Bash(ls node_modules/.bin/ts*)"
     ]
   }
 }
