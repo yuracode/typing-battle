@@ -186,12 +186,56 @@ export function processKey(state: EngineState, key: string): ProcessResult {
     };
   }
 
+  // 複合トークンの動的分割:
+  // 例: ふぉ['fo'] で 'h' が来た場合 → ふ['fu','hu'] + ぉ['lo','xo'] に分割し
+  // 入力をリプレイして hu + xo 等の個別入力を受け付ける
+  if (token.kana.length >= 2) {
+    const splitResult = trySplitAndReplay(state, candidate);
+    if (splitResult) return splitResult;
+  }
+
   // ミス
   return {
     accepted: false,
     tokenCompleted: false,
     allCompleted: false,
     newState: { tokens, tokenIdx, buffer, mistakes: mistakes + 1 },
+  };
+}
+
+/**
+ * 複合トークンを個別かなに分割し、入力済みのバッファ+キーをリプレイする。
+ * リプレイが成功すれば分割後の状態を返し、失敗すれば null を返す。
+ */
+function trySplitAndReplay(state: EngineState, candidate: string): ProcessResult | null {
+  const { tokens, tokenIdx, mistakes } = state;
+  const token = tokens[tokenIdx];
+
+  // 各文字を個別トークンに変換
+  const splitTokens: RomajiToken[] = [];
+  for (const ch of token.kana) {
+    const entry = KANA_TABLE.find(([k]) => k === ch);
+    if (!entry) return null; // テーブルにない文字は分割不可
+    splitTokens.push({ kana: ch, patterns: [...entry[1]] });
+  }
+
+  // 新しいトークン配列を作成（複合→個別に置換）
+  const newTokens = [...tokens];
+  newTokens.splice(tokenIdx, 1, ...splitTokens);
+
+  // candidate を1文字ずつリプレイ
+  let replayState: EngineState = { tokens: newTokens, tokenIdx, buffer: '', mistakes };
+  for (const ch of candidate) {
+    const result = processKey(replayState, ch);
+    if (!result.accepted) return null; // 分割しても受け付けられない → 本当のミス
+    replayState = result.newState;
+  }
+
+  return {
+    accepted: true,
+    tokenCompleted: replayState.tokenIdx > tokenIdx,
+    allCompleted: replayState.tokenIdx >= replayState.tokens.length,
+    newState: replayState,
   };
 }
 
