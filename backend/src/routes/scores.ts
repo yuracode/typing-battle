@@ -47,7 +47,7 @@ router.get('/ranking', async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT u.nickname,
-              MAX(s.typed_chars) as best_chars,
+              SUM(s.typed_chars) as best_chars,
               MAX(s.wpm) as best_wpm,
               AVG(s.accuracy) as avg_accuracy,
               COUNT(*) as games,

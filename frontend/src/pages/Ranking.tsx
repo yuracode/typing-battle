@@ -78,7 +78,7 @@ export default function Ranking({ nickname, onBack }: Props) {
         {/* ソートタブ */}
         <div className="flex gap-1 mb-4">
           {([
-            { key: 'chars',    label: '打鍵数',   color: 'bg-sky-600' },
+            { key: 'chars',    label: '総打鍵数', color: 'bg-sky-600' },
             { key: 'kpm',      label: '打鍵/分',  color: 'bg-amber-600' },
             { key: 'accuracy', label: '正確率',   color: 'bg-emerald-600' },
           ] as { key: RankSort; label: string; color: string }[]).map(({ key, label, color }) => (

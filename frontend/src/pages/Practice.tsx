@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Socket } from 'socket.io-client';
 import { Problem, ScoreRecord } from '../types';
 import TypingInput from '../components/TypingInput';
@@ -16,6 +16,28 @@ interface Props {
 
 type Phase = 'loading' | 'ready' | 'typing' | 'done';
 
+interface SessionResult {
+  topicsCompleted: number;
+  totalTypedChars: number;
+  totalMistakes: number;
+  durationMs: number;
+  timeLimitSec: number;
+}
+
+const TIME_LIMIT_OPTIONS: { label: string; value: number }[] = [
+  { label: '無制限', value: 0 },
+  { label: '1分',   value: 60 },
+  { label: '3分',   value: 180 },
+  { label: '5分',   value: 300 },
+];
+
+const formatCountdown = (ms: number) => {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
+};
+
 export default function Practice({ socket, nickname, userId, onBack, onViewStats, onViewRanking }: Props) {
   const [phase, setPhase] = useState<Phase>('loading');
   const [problem, setProblem] = useState<Problem | null>(null);
@@ -26,6 +48,17 @@ export default function Practice({ socket, nickname, userId, onBack, onViewStats
   const [topicFilter, setTopicFilter] = useState<TopicFilterValue>('all');
   const [filterOpen, setFilterOpen] = useState(false);
   const [historySortBy, setHistorySortBy] = useState<'chars' | 'kpm'>('chars');
+
+  // 時間制限モード（0 = 無制限・既存挙動）
+  const [timeLimit, setTimeLimit] = useState<number>(0);
+  const [remainingMs, setRemainingMs] = useState<number>(0);
+  const [sessionResult, setSessionResult] = useState<SessionResult | null>(null);
+  const sessionStartRef = useRef<number | null>(null);
+  const sessionStatsRef = useRef<{ topicsCompleted: number; totalTypedChars: number; totalMistakes: number }>({
+    topicsCompleted: 0,
+    totalTypedChars: 0,
+    totalMistakes: 0,
+  });
 
   // REST APIでお題取得（フィルタ対応）
   const loadProblem = async (filter: TopicFilterValue = topicFilter) => {
@@ -74,6 +107,40 @@ export default function Practice({ socket, nickname, userId, onBack, onViewStats
     };
   }, []);
 
+  // 時間制限モードのカウントダウン
+  useEffect(() => {
+    if (timeLimit === 0 || phase !== 'typing') return;
+    const start = sessionStartRef.current;
+    if (!start) return;
+    const tick = () => {
+      const remaining = timeLimit * 1000 - (Date.now() - start);
+      if (remaining <= 0) {
+        setRemainingMs(0);
+        finalizeSession();
+      } else {
+        setRemainingMs(remaining);
+      }
+    };
+    tick();
+    const interval = setInterval(tick, 200);
+    return () => clearInterval(interval);
+  }, [phase, timeLimit]);
+
+  const finalizeSession = () => {
+    const stats = sessionStatsRef.current;
+    const start = sessionStartRef.current;
+    const elapsed = start ? Math.min(Date.now() - start, timeLimit * 1000) : timeLimit * 1000;
+    setSessionResult({
+      topicsCompleted: stats.topicsCompleted,
+      totalTypedChars: stats.totalTypedChars,
+      totalMistakes: stats.totalMistakes,
+      durationMs: elapsed,
+      timeLimitSec: timeLimit,
+    });
+    setPhase('done');
+    sessionStartRef.current = null; // 二重発火防止
+  };
+
   // タイマーを維持したままスキップ（startTime はリセットしない）
   const handleSkip = async () => {
     setResult(null);
@@ -89,8 +156,43 @@ export default function Practice({ socket, nickname, userId, onBack, onViewStats
   };
 
   const handleStart = () => {
+    const now = Date.now();
     setPhase('typing');
-    setStartTime(Date.now());
+    setStartTime(now);
+    setResult(null);
+    setSessionResult(null);
+    if (timeLimit > 0) {
+      sessionStartRef.current = now;
+      sessionStatsRef.current = { topicsCompleted: 0, totalTypedChars: 0, totalMistakes: 0 };
+      setRemainingMs(timeLimit * 1000);
+    } else {
+      sessionStartRef.current = null;
+    }
+  };
+
+  // 時間制限モードで現お題完了後に次のお題へ自動遷移
+  const advanceToNextTopic = async () => {
+    setStartTime(null); // 取得中の打鍵を無効化
+    try {
+      const params = filterToParams(topicFilter);
+      const qs = params.toString() ? `?${params}` : '';
+      const res = await fetch(`/api/topics/random${qs}`);
+      const topic = await res.json();
+      if (!topic) { finalizeSession(); return; }
+      setProblem(topic);
+      setStartTime(Date.now());
+    } catch {
+      finalizeSession();
+    }
+  };
+
+  // 中断ボタン：時間制限モードはセッション終了、無制限モードはお題差し替え
+  const handleAbort = () => {
+    if (timeLimit > 0 && sessionStartRef.current) {
+      finalizeSession();
+    } else {
+      loadProblem();
+    }
   };
 
   const handleProgress = (_progress: number, wpm: number) => {
@@ -98,10 +200,8 @@ export default function Practice({ socket, nickname, userId, onBack, onViewStats
   };
 
   const handleComplete = (wpm: number, accuracy: number, durationMs?: number, mistakes?: number, typedChars?: number) => {
-    setPhase('done');
-    setResult({ wpm, accuracy, durationMs, mistakes, typedChars });
+    // 1お題ごとのスコアは常に保存
     if (problem) {
-      // Socket経由でスコア保存
       socket.emit('practice:complete', {
         userId,
         topicId: problem.id,
@@ -110,8 +210,26 @@ export default function Practice({ socket, nickname, userId, onBack, onViewStats
         typedChars: typedChars ?? 0,
         durationMs: durationMs ?? 0,
       });
-      // 履歴を更新
       loadHistory();
+    }
+
+    if (timeLimit > 0 && sessionStartRef.current) {
+      // 時間制限モード：セッション集計に加算して、残時間があれば次お題へ
+      sessionStatsRef.current = {
+        topicsCompleted: sessionStatsRef.current.topicsCompleted + 1,
+        totalTypedChars: sessionStatsRef.current.totalTypedChars + (typedChars ?? 0),
+        totalMistakes: sessionStatsRef.current.totalMistakes + (mistakes ?? 0),
+      };
+      const remaining = timeLimit * 1000 - (Date.now() - sessionStartRef.current);
+      if (remaining > 0) {
+        void advanceToNextTopic();
+      } else {
+        finalizeSession();
+      }
+    } else {
+      // 無制限モード（既存挙動）：単一お題の結果を表示
+      setPhase('done');
+      setResult({ wpm, accuracy, durationMs, mistakes, typedChars });
     }
   };
 
@@ -199,6 +317,26 @@ export default function Practice({ socket, nickname, userId, onBack, onViewStats
             onChange={(v) => { setTopicFilter(v); setFilterOpen(false); }}
           />
         )}
+        {/* 時間制限選択 */}
+        <div className="flex items-center gap-3 pt-1">
+          <span className="text-slate-500 dark:text-slate-400 text-xs whitespace-nowrap">時間:</span>
+          <div className="flex gap-1 flex-wrap">
+            {TIME_LIMIT_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => setTimeLimit(opt.value)}
+                disabled={phase === 'typing'}
+                className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                  timeLimit === opt.value
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-slate-600'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
@@ -251,9 +389,22 @@ export default function Practice({ socket, nickname, userId, onBack, onViewStats
             {(phase === 'typing' || phase === 'done') && problem && (
               <div className="space-y-4">
                 {phase === 'typing' && (
-                  <div className="flex justify-end gap-4">
-                    <span className="text-sky-400 font-mono font-bold text-lg">{currentWpm * 5} 打/分</span>
-                    <span className="text-slate-400 font-mono text-sm self-end mb-0.5">{currentWpm} WPM</span>
+                  <div className="flex justify-between items-end gap-4">
+                    {timeLimit > 0 ? (
+                      <span
+                        className={`font-mono font-bold text-2xl ${
+                          remainingMs <= 10000 ? 'text-red-500 animate-pulse' : 'text-amber-400'
+                        }`}
+                      >
+                        ⏱ {formatCountdown(remainingMs)}
+                      </span>
+                    ) : (
+                      <span />
+                    )}
+                    <div className="flex gap-4 ml-auto">
+                      <span className="text-sky-400 font-mono font-bold text-lg">{currentWpm * 5} 打/分</span>
+                      <span className="text-slate-400 font-mono text-sm self-end mb-0.5">{currentWpm} WPM</span>
+                    </div>
                   </div>
                 )}
                 <TypingInput
@@ -273,18 +424,65 @@ export default function Practice({ socket, nickname, userId, onBack, onViewStats
                       ⏭ スキップ
                     </button>
                     <button
-                      onClick={() => loadProblem()}
+                      onClick={handleAbort}
                       className="flex-1 bg-red-900/60 hover:bg-red-800/80 text-red-300 font-bold py-2.5 rounded-xl transition-colors text-sm"
                     >
-                      ✕ 中断
+                      {timeLimit > 0 ? '⏹ 終了' : '✕ 中断'}
                     </button>
                   </div>
                 )}
               </div>
             )}
 
-            {/* 結果表示 */}
-            {phase === 'done' && result && (
+            {/* 時間制限モードのセッション結果 */}
+            {phase === 'done' && sessionResult && (
+              <div className="bg-slate-100 dark:bg-slate-700 rounded-xl p-6 space-y-4">
+                <h3 className="text-xl font-bold text-center text-emerald-400">
+                  🎉 セッション終了！（{Math.round(sessionResult.timeLimitSec / 60)}分）
+                </h3>
+                <div className="grid grid-cols-5 gap-3 text-center">
+                  <div>
+                    <p className="text-3xl font-bold text-purple-400">{sessionResult.topicsCompleted}</p>
+                    <p className="text-slate-500 dark:text-slate-400 text-xs">完了お題</p>
+                  </div>
+                  <div>
+                    <p className="text-3xl font-bold text-sky-400">{sessionResult.totalTypedChars}</p>
+                    <p className="text-slate-500 dark:text-slate-400 text-xs">総打鍵数</p>
+                  </div>
+                  <div>
+                    <p className="text-3xl font-bold text-amber-400">
+                      {sessionResult.durationMs > 0
+                        ? Math.round(sessionResult.totalTypedChars * 60000 / sessionResult.durationMs)
+                        : 0}
+                    </p>
+                    <p className="text-slate-500 dark:text-slate-400 text-xs">平均打鍵/分</p>
+                  </div>
+                  <div>
+                    <p className="text-3xl font-bold text-emerald-400">
+                      {sessionResult.totalTypedChars + sessionResult.totalMistakes > 0
+                        ? Math.round(sessionResult.totalTypedChars / (sessionResult.totalTypedChars + sessionResult.totalMistakes) * 100)
+                        : 100}%
+                    </p>
+                    <p className="text-slate-500 dark:text-slate-400 text-xs">正確率</p>
+                  </div>
+                  <div>
+                    <p className={`text-3xl font-bold ${sessionResult.totalMistakes === 0 ? 'text-yellow-400' : 'text-red-400'}`}>
+                      {sessionResult.totalMistakes}
+                    </p>
+                    <p className="text-slate-500 dark:text-slate-400 text-xs">総ミス数</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => { setSessionResult(null); loadProblem(); }}
+                  className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl transition-colors"
+                >
+                  🔄 もう一度
+                </button>
+              </div>
+            )}
+
+            {/* 結果表示（無制限モード） */}
+            {phase === 'done' && result && !sessionResult && (
               <div className="bg-slate-100 dark:bg-slate-700 rounded-xl p-6 space-y-4">
                 <h3 className="text-xl font-bold text-center text-emerald-400">🎉 完了！</h3>
                 <div className="grid grid-cols-5 gap-3 text-center">
