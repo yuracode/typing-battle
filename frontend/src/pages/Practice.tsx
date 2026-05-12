@@ -59,6 +59,13 @@ export default function Practice({ socket, nickname, userId, onBack, onViewStats
     totalTypedChars: 0,
     totalMistakes: 0,
   });
+  // 進行中お題の打鍵状況（時間切れ時に合計へ加算するため）
+  const currentTopicStatsRef = useRef<{
+    topicId: number | null;
+    startedAt: number | null;
+    typedChars: number;
+    mistakes: number;
+  }>({ topicId: null, startedAt: null, typedChars: 0, mistakes: 0 });
 
   // REST APIでお題取得（フィルタ対応）
   const loadProblem = async (filter: TopicFilterValue = topicFilter) => {
@@ -128,17 +135,40 @@ export default function Practice({ socket, nickname, userId, onBack, onViewStats
 
   const finalizeSession = () => {
     const stats = sessionStatsRef.current;
+    const current = currentTopicStatsRef.current;
     const start = sessionStartRef.current;
     const elapsed = start ? Math.min(Date.now() - start, timeLimit * 1000) : timeLimit * 1000;
+
+    // 進行中お題で打鍵があれば、その分も保存＆合計に加算
+    if (current.topicId !== null && current.typedChars > 0 && current.startedAt) {
+      const topicElapsed = Date.now() - current.startedAt;
+      const totalInput = current.typedChars + current.mistakes;
+      const accuracy = totalInput > 0 ? Math.round((current.typedChars / totalInput) * 100) : 100;
+      const wpm = topicElapsed > 0 ? Math.round((current.typedChars / 5) / (topicElapsed / 60000)) : 0;
+      socket.emit('practice:complete', {
+        userId,
+        topicId: current.topicId,
+        wpm,
+        accuracy,
+        typedChars: current.typedChars,
+        durationMs: topicElapsed,
+      });
+      loadHistory();
+    }
+
+    const partialTyped = current.topicId !== null ? current.typedChars : 0;
+    const partialMistakes = current.topicId !== null ? current.mistakes : 0;
+
     setSessionResult({
       topicsCompleted: stats.topicsCompleted,
-      totalTypedChars: stats.totalTypedChars,
-      totalMistakes: stats.totalMistakes,
+      totalTypedChars: stats.totalTypedChars + partialTyped,
+      totalMistakes: stats.totalMistakes + partialMistakes,
       durationMs: elapsed,
       timeLimitSec: timeLimit,
     });
     setPhase('done');
     sessionStartRef.current = null; // 二重発火防止
+    currentTopicStatsRef.current = { topicId: null, startedAt: null, typedChars: 0, mistakes: 0 };
   };
 
   // タイマーを維持したままスキップ（startTime はリセットしない）
@@ -151,6 +181,12 @@ export default function Practice({ socket, nickname, userId, onBack, onViewStats
       const topic = await res.json();
       if (!topic) return;
       setProblem(topic);
+      currentTopicStatsRef.current = {
+        topicId: topic.id,
+        startedAt: Date.now(),
+        typedChars: 0,
+        mistakes: 0,
+      };
       setPhase('typing');
     } catch {}
   };
@@ -161,6 +197,12 @@ export default function Practice({ socket, nickname, userId, onBack, onViewStats
     setStartTime(now);
     setResult(null);
     setSessionResult(null);
+    currentTopicStatsRef.current = {
+      topicId: problem?.id ?? null,
+      startedAt: now,
+      typedChars: 0,
+      mistakes: 0,
+    };
     if (timeLimit > 0) {
       sessionStartRef.current = now;
       sessionStatsRef.current = { topicsCompleted: 0, totalTypedChars: 0, totalMistakes: 0 };
@@ -173,6 +215,7 @@ export default function Practice({ socket, nickname, userId, onBack, onViewStats
   // 時間制限モードで現お題完了後に次のお題へ自動遷移
   const advanceToNextTopic = async () => {
     setStartTime(null); // 取得中の打鍵を無効化
+    currentTopicStatsRef.current = { topicId: null, startedAt: null, typedChars: 0, mistakes: 0 };
     try {
       const params = filterToParams(topicFilter);
       const qs = params.toString() ? `?${params}` : '';
@@ -180,7 +223,14 @@ export default function Practice({ socket, nickname, userId, onBack, onViewStats
       const topic = await res.json();
       if (!topic) { finalizeSession(); return; }
       setProblem(topic);
-      setStartTime(Date.now());
+      const now = Date.now();
+      currentTopicStatsRef.current = {
+        topicId: topic.id,
+        startedAt: now,
+        typedChars: 0,
+        mistakes: 0,
+      };
+      setStartTime(now);
     } catch {
       finalizeSession();
     }
@@ -195,8 +245,13 @@ export default function Practice({ socket, nickname, userId, onBack, onViewStats
     }
   };
 
-  const handleProgress = (_progress: number, wpm: number) => {
+  const handleProgress = (_progress: number, wpm: number, typedChars: number, mistakes: number) => {
     setCurrentWpm(wpm);
+    currentTopicStatsRef.current = {
+      ...currentTopicStatsRef.current,
+      typedChars,
+      mistakes,
+    };
   };
 
   const handleComplete = (wpm: number, accuracy: number, durationMs?: number, mistakes?: number, typedChars?: number) => {
@@ -220,6 +275,8 @@ export default function Practice({ socket, nickname, userId, onBack, onViewStats
         totalTypedChars: sessionStatsRef.current.totalTypedChars + (typedChars ?? 0),
         totalMistakes: sessionStatsRef.current.totalMistakes + (mistakes ?? 0),
       };
+      // 完了済みお題は sessionStatsRef に集計済みなので、進行中refはクリア（finalizeSessionでの二重加算防止）
+      currentTopicStatsRef.current = { topicId: null, startedAt: null, typedChars: 0, mistakes: 0 };
       const remaining = timeLimit * 1000 - (Date.now() - sessionStartRef.current);
       if (remaining > 0) {
         void advanceToNextTopic();

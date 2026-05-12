@@ -12,7 +12,7 @@ interface Props {
   mode: 'direct' | 'romaji';
   /** direct モード: コード文字列 / romaji モード: ひらがな文字列 */
   target: string;
-  onProgress: (progress: number, wpm: number, typedChars: number) => void;
+  onProgress: (progress: number, wpm: number, typedChars: number, mistakes: number) => void;
   onComplete: (wpm: number, accuracy: number, durationMs?: number, mistakes?: number, typedChars?: number) => void;
   disabled?: boolean;
   startTime: number | null;
@@ -78,10 +78,10 @@ export default function TypingInput({
 
     const key = e.key;
 
-    // ブラウザのデフォルト動作を抑制（スクロール・フォーム送信など）
-    if (key.length === 1 || key === 'Backspace' || key === 'Enter') e.preventDefault();
+    // ブラウザのデフォルト動作を抑制（スクロール・フォーム送信・フォーカス移動など）
+    if (key.length === 1 || key === 'Backspace' || key === 'Enter' || key === 'Tab') e.preventDefault();
 
-    if (key.length > 1 && key !== 'Backspace' && key !== 'Enter') return;
+    if (key.length > 1 && key !== 'Backspace' && key !== 'Enter' && key !== 'Tab') return;
 
     // コードスニペットの改行は Enter → '\n' に変換
     const actualKey = key === 'Enter' ? '\n' : key;
@@ -90,6 +90,8 @@ export default function TypingInput({
 
     // ─── romaji モード ───
     if (mode === 'romaji' && engine) {
+      // 日本語モードでは Tab は無視
+      if (key === 'Tab') return;
       if (actualKey === 'Backspace') {
         // バッファを1文字削除 / 空なら前トークンへ
         if (engine.buffer.length > 0) {
@@ -103,19 +105,17 @@ export default function TypingInput({
       const result = processKey(engine, actualKey);
       setEngine(result.newState);
 
-      if (result.accepted) {
-        typedCharsRef.current++;
-        const progress = getProgress(result.newState);
-        const wpm = calcWpm(typedCharsRef.current, elapsed);
-        onProgress(progress, wpm, typedCharsRef.current);
+      if (result.accepted) typedCharsRef.current++;
 
-        if (result.allCompleted) {
-          const totalInput = typedCharsRef.current + result.newState.mistakes;
-          const accuracy = totalInput > 0 ? Math.round((typedCharsRef.current / totalInput) * 100) : 100;
-          onComplete(wpm, accuracy, elapsed, result.newState.mistakes, typedCharsRef.current);
-        }
+      const progress = getProgress(result.newState);
+      const wpm = calcWpm(typedCharsRef.current, elapsed);
+      onProgress(progress, wpm, typedCharsRef.current, result.newState.mistakes);
+
+      if (result.accepted && result.allCompleted) {
+        const totalInput = typedCharsRef.current + result.newState.mistakes;
+        const accuracy = totalInput > 0 ? Math.round((typedCharsRef.current / totalInput) * 100) : 100;
+        onComplete(wpm, accuracy, elapsed, result.newState.mistakes, typedCharsRef.current);
       }
-      // 不正解は state.mistakes が増えるだけ（ブロック）
       return;
     }
 
@@ -128,13 +128,41 @@ export default function TypingInput({
         return;
       }
 
+      // Tab: 次の4文字がすべてスペースなら +4進める（1打鍵としてカウント）
+      if (key === 'Tab') {
+        const pos = direct.position;
+        if (target.slice(pos, pos + 4) === '    ') {
+          typedCharsRef.current++;
+          const newPos = pos + 4;
+          const progress = Math.round((newPos / target.length) * 100);
+          const wpm = calcWpm(typedCharsRef.current, elapsed);
+          onProgress(progress, wpm, typedCharsRef.current, direct.mistakes);
+          setDirect((prev) => ({ ...prev, position: newPos }));
+
+          if (newPos === target.length) {
+            const totalInput = typedCharsRef.current + direct.mistakes;
+            const accuracy = totalInput > 0 ? Math.round((typedCharsRef.current / totalInput) * 100) : 100;
+            onComplete(wpm, accuracy, elapsed, direct.mistakes, typedCharsRef.current);
+          }
+        } else {
+          // 残りスペース3個以下 or 非スペース混在 → ミス扱い
+          const newMistakes = direct.mistakes + 1;
+          setDirect((prev) => ({ ...prev, mistakes: newMistakes, flash: true }));
+          const progress = target.length > 0 ? Math.round((pos / target.length) * 100) : 0;
+          const wpm = calcWpm(typedCharsRef.current, elapsed);
+          onProgress(progress, wpm, typedCharsRef.current, newMistakes);
+          setTimeout(() => setDirect((prev) => ({ ...prev, flash: false })), 150);
+        }
+        return;
+      }
+
       if (actualKey === target[direct.position]) {
         // 正解
         typedCharsRef.current++;
         const newPos = direct.position + 1;
         const progress = Math.round((newPos / target.length) * 100);
         const wpm = calcWpm(typedCharsRef.current, elapsed);
-        onProgress(progress, wpm, typedCharsRef.current);
+        onProgress(progress, wpm, typedCharsRef.current, direct.mistakes);
         setDirect((prev) => ({ ...prev, position: newPos }));
 
         if (newPos === target.length) {
@@ -144,7 +172,11 @@ export default function TypingInput({
         }
       } else {
         // 誤入力: ブロック + フラッシュ
-        setDirect((prev) => ({ ...prev, mistakes: prev.mistakes + 1, flash: true }));
+        const newMistakes = direct.mistakes + 1;
+        setDirect((prev) => ({ ...prev, mistakes: newMistakes, flash: true }));
+        const progress = target.length > 0 ? Math.round((direct.position / target.length) * 100) : 0;
+        const wpm = calcWpm(typedCharsRef.current, elapsed);
+        onProgress(progress, wpm, typedCharsRef.current, newMistakes);
         setTimeout(() => setDirect((prev) => ({ ...prev, flash: false })), 150);
       }
     }
