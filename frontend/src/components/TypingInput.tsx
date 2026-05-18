@@ -38,7 +38,7 @@ export default function TypingInput({
   disabled,
   startTime,
 }: Props) {
-  const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // romaji モード
   const [engine, setEngine] = useState<EngineState | null>(null);
@@ -46,6 +46,8 @@ export default function TypingInput({
   const [direct, setDirect] = useState<DirectState>({ position: 0, mistakes: 0, flash: false });
   // 打鍵数カウンター
   const typedCharsRef = useRef(0);
+  // IME 変換中フラグ
+  const [isComposing, setIsComposing] = useState(false);
 
   // target / mode 変更時にリセット
   useEffect(() => {
@@ -55,30 +57,65 @@ export default function TypingInput({
     } else {
       setDirect({ position: 0, mistakes: 0, flash: false });
     }
-    if (!disabled) containerRef.current?.focus();
+    if (inputRef.current) inputRef.current.value = '';
+    if (!disabled) inputRef.current?.focus();
   }, [target, mode]);
 
   useEffect(() => {
-    if (!disabled) containerRef.current?.focus();
+    if (!disabled) inputRef.current?.focus();
   }, [disabled]);
 
-  // 頻繁な progress_update 再レンダリングでフォーカスが外れるのを防止
+  // 頻繁な再レンダリングでフォーカスが外れるのを防止
   useEffect(() => {
     if (disabled) return;
     const interval = setInterval(() => {
-      if (document.activeElement !== containerRef.current) {
-        containerRef.current?.focus();
+      if (!isComposing && document.activeElement !== inputRef.current) {
+        inputRef.current?.focus();
       }
     }, 500);
     return () => clearInterval(interval);
-  }, [disabled]);
+  }, [disabled, isComposing]);
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+  // ─── direct モード: 1文字を判定 ───
+  const processDirectChar = (ch: string) => {
+    if (!startTime) return;
+    const elapsed = Date.now() - startTime;
+    setDirect((prev) => {
+      // 既に完了済みなら無視
+      if (prev.position >= target.length) return prev;
+
+      if (ch === target[prev.position]) {
+        typedCharsRef.current++;
+        const newPos = prev.position + 1;
+        const progress = Math.round((newPos / target.length) * 100);
+        const wpm = calcWpm(typedCharsRef.current, elapsed);
+        onProgress(progress, wpm, typedCharsRef.current, prev.mistakes);
+        if (newPos === target.length) {
+          const totalInput = typedCharsRef.current + prev.mistakes;
+          const accuracy = totalInput > 0 ? Math.round((typedCharsRef.current / totalInput) * 100) : 100;
+          onComplete(wpm, accuracy, elapsed, prev.mistakes, typedCharsRef.current);
+        }
+        return { ...prev, position: newPos };
+      } else {
+        const newMistakes = prev.mistakes + 1;
+        const progress = target.length > 0 ? Math.round((prev.position / target.length) * 100) : 0;
+        const wpm = calcWpm(typedCharsRef.current, elapsed);
+        onProgress(progress, wpm, typedCharsRef.current, newMistakes);
+        setTimeout(() => setDirect((p) => ({ ...p, flash: false })), 150);
+        return { ...prev, mistakes: newMistakes, flash: true };
+      }
+    });
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (disabled || !startTime) return;
+
+    // IME 変換中はネイティブの IME に委ねる
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
 
     const key = e.key;
 
-    // ブラウザのデフォルト動作を抑制（スクロール・フォーム送信・フォーカス移動など）
+    // ブラウザのデフォルト動作を抑制（input への文字挿入・フォーム送信など）
     if (key.length === 1 || key === 'Backspace' || key === 'Enter' || key === 'Tab') e.preventDefault();
 
     if (key.length > 1 && key !== 'Backspace' && key !== 'Enter' && key !== 'Tab') return;
@@ -93,7 +130,6 @@ export default function TypingInput({
       // 日本語モードでは Tab は無視
       if (key === 'Tab') return;
       if (actualKey === 'Backspace') {
-        // バッファを1文字削除 / 空なら前トークンへ
         if (engine.buffer.length > 0) {
           setEngine({ ...engine, buffer: engine.buffer.slice(0, -1) });
         } else if (engine.tokenIdx > 0) {
@@ -156,29 +192,21 @@ export default function TypingInput({
         return;
       }
 
-      if (actualKey === target[direct.position]) {
-        // 正解
-        typedCharsRef.current++;
-        const newPos = direct.position + 1;
-        const progress = Math.round((newPos / target.length) * 100);
-        const wpm = calcWpm(typedCharsRef.current, elapsed);
-        onProgress(progress, wpm, typedCharsRef.current, direct.mistakes);
-        setDirect((prev) => ({ ...prev, position: newPos }));
+      processDirectChar(actualKey);
+    }
+  };
 
-        if (newPos === target.length) {
-          const totalInput = typedCharsRef.current + direct.mistakes;
-          const accuracy = totalInput > 0 ? Math.round((typedCharsRef.current / totalInput) * 100) : 100;
-          onComplete(wpm, accuracy, elapsed, direct.mistakes, typedCharsRef.current);
-        }
-      } else {
-        // 誤入力: ブロック + フラッシュ
-        const newMistakes = direct.mistakes + 1;
-        setDirect((prev) => ({ ...prev, mistakes: newMistakes, flash: true }));
-        const progress = target.length > 0 ? Math.round((direct.position / target.length) * 100) : 0;
-        const wpm = calcWpm(typedCharsRef.current, elapsed);
-        onProgress(progress, wpm, typedCharsRef.current, newMistakes);
-        setTimeout(() => setDirect((prev) => ({ ...prev, flash: false })), 150);
-      }
+  // IME 変換確定時：確定文字を1文字ずつ direct マッチャに通す
+  const handleCompositionEnd = (e: React.CompositionEvent<HTMLInputElement>) => {
+    setIsComposing(false);
+    // 入力欄に残った確定文字をクリア
+    if (inputRef.current) inputRef.current.value = '';
+    if (disabled || !startTime) return;
+    // romaji モードでは IME 入力は使わない（ASCII 入力のみ）
+    if (mode !== 'direct') return;
+    const text = e.data || '';
+    for (const ch of text) {
+      processDirectChar(ch);
     }
   };
 
@@ -192,21 +220,40 @@ export default function TypingInput({
       : 0;
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" onClick={() => inputRef.current?.focus()}>
       {/* テキスト表示 */}
-      <div
-        ref={containerRef}
-        tabIndex={0}
+      {mode === 'romaji' && engine ? (
+        <RomajiDisplay engine={engine} flash={false} />
+      ) : (
+        <DirectDisplay target={target} position={direct.position} flash={direct.flash} />
+      )}
+
+      {/* キー入力 / IME 取り込み用 input */}
+      <input
+        ref={inputRef}
+        type="text"
+        defaultValue=""
         onKeyDown={handleKeyDown}
-        className="outline-none cursor-text"
-        onClick={() => containerRef.current?.focus()}
-      >
-        {mode === 'romaji' && engine ? (
-          <RomajiDisplay engine={engine} flash={false} />
-        ) : (
-          <DirectDisplay target={target} position={direct.position} flash={direct.flash} />
-        )}
-      </div>
+        onCompositionStart={() => setIsComposing(true)}
+        onCompositionEnd={handleCompositionEnd}
+        onPaste={(e) => e.preventDefault()}
+        disabled={disabled}
+        autoComplete="off"
+        autoCorrect="off"
+        autoCapitalize="off"
+        spellCheck={false}
+        aria-label="タイピング入力"
+        className={
+          mode === 'direct'
+            ? `w-full px-3 py-2 rounded-lg font-mono text-base outline-none transition-colors bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 border ${
+                isComposing
+                  ? 'border-sky-400 dark:border-sky-500 ring-2 ring-sky-200 dark:ring-sky-900'
+                  : 'border-slate-300 dark:border-slate-600'
+              } focus:border-sky-400 dark:focus:border-sky-500`
+            : 'sr-only'
+        }
+        placeholder={mode === 'direct' ? '日本語(IME)入力中はここに変換中の文字が出ます' : ''}
+      />
 
       {/* 進捗バー */}
       <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2">
@@ -219,7 +266,9 @@ export default function TypingInput({
       {/* フォーカス案内 */}
       {!disabled && (
         <p className="text-slate-400 dark:text-slate-500 text-xs text-center">
-          クリックまたはフォーカスしてから入力してください
+          {mode === 'direct'
+            ? '英数字は直接判定／日本語は IME で変換確定すると自動判定されます'
+            : 'クリックまたはフォーカスしてから入力してください'}
         </p>
       )}
     </div>

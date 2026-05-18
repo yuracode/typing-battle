@@ -28,7 +28,8 @@
       "Bash(node -e ' *)",
       "Bash(npx tsx *)",
       "Bash(git -C /home/cyber/typing-battle log --oneline -10)",
-      "Bash(git -C /home/cyber/typing-battle log -p --stat 3b69ebe -- frontend/src/pages/Practice.tsx frontend/src/components/TypingInput.tsx)"
+      "Bash(git -C /home/cyber/typing-battle log -p --stat 3b69ebe -- frontend/src/pages/Practice.tsx frontend/src/components/TypingInput.tsx)",
+      "Bash(echo \"Exit code: $?\")"
     ]
   }
 }

@@ -114,6 +114,19 @@ export default function Practice({ socket, nickname, userId, onBack, onViewStats
     };
   }, []);
 
+  // 無制限モードで完了後、Enterキーで次のお題を読み込んで即スタート
+  useEffect(() => {
+    if (phase !== 'done' || timeLimit !== 0 || !result) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        void loadAndStartNext();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [phase, timeLimit, result]);
+
   // 時間制限モードのカウントダウン
   useEffect(() => {
     if (timeLimit === 0 || phase !== 'typing') return;
@@ -169,6 +182,33 @@ export default function Practice({ socket, nickname, userId, onBack, onViewStats
     setPhase('done');
     sessionStartRef.current = null; // 二重発火防止
     currentTopicStatsRef.current = { topicId: null, startedAt: null, typedChars: 0, mistakes: 0 };
+  };
+
+  // 無制限モード用：次のお題を読み込んでそのまま開始する（Enterキー用）
+  const loadAndStartNext = async () => {
+    setPhase('loading');
+    setResult(null);
+    setStartTime(null);
+    try {
+      const params = filterToParams(topicFilter);
+      const qs = params.toString() ? `?${params}` : '';
+      const res = await fetch(`/api/topics/random${qs}`);
+      const topic = await res.json();
+      if (!topic) { alert('該当するお題がありません'); setPhase('ready'); return; }
+      setProblem(topic);
+      const now = Date.now();
+      currentTopicStatsRef.current = {
+        topicId: topic.id,
+        startedAt: now,
+        typedChars: 0,
+        mistakes: 0,
+      };
+      setStartTime(now);
+      setPhase('typing');
+    } catch {
+      alert('お題の取得に失敗しました');
+      setPhase('ready');
+    }
   };
 
   // タイマーを維持したままスキップ（startTime はリセットしない）
@@ -576,7 +616,7 @@ export default function Practice({ socket, nickname, userId, onBack, onViewStats
                   onClick={() => loadProblem()}
                   className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl transition-colors"
                 >
-                  🔄 次のお題
+                  🔄 次のお題（Enterキーで即スタート）
                 </button>
               </div>
             )}
